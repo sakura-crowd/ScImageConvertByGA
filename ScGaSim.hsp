@@ -1,0 +1,290 @@
+/// モジュール変数の遺伝子群に遺伝的アルゴリズムを適用するモジュールです。
+///	遺伝子は0または1を要素値とする1次元配列です。
+///	遺伝子と同じ要素数の教師データと比較し、一致する要素が多いほど評価を高くします。
+/// 
+///	ルーレット選択、二点交差、突然変異を行います。
+///
+///	使用例
+///	newmod GaSim
+///	
+/// genes_ 遺伝子を複数格納する2次元配列。現世代の遺伝子群です。
+/// genesNext_ 次世代の遺伝子群です。genes_と構造やサイズは同じです。
+/// population_ 個体数です。全世代で同じです。10ならば全世代で遺伝子の個体数は10となります。
+/// geneDataSize_ 遺伝子の持つ要素の数です。2以上。
+/// geneGoal_ 教師データの1次元配列です。
+///	generation_ 現在の世代数です。
+/// probMutation_ 遺伝子の1要素に対する突然変異の0.1%単位の確率です。1000=100%
+/// probCrossover_ 2つの遺伝子を交叉するかどうかの0.1%単位の確率です。1000=100%。現在100%固定のため、設定は無視されます。
+/// fitnessList_ 適応度リストです。大きいほうが高い評価になります。教師データと一致した個数です。
+/// numofElite_ エリート保存戦略の個数です。最も適応している遺伝子を次世代にコピーします。
+#module ScGaSim genes_, genesNext_, population_, geneDataSize_, geneGoal_, generation_, probMutation_, probCrossover, fitnessList_, numofElite_
+	/// コンストラクタです。
+	/// 遺伝子の要素はすべて 0 になっています。
+	/// 引数はモジュールのメンバ変数を参照してください。
+	#modinit int _population, int _geneDataSize, array _geneGoal, int _probMutaion, int _probCrossover, int _numofElite
+		population_ = _population
+		geneDataSize_ = _geneDataSize
+		if geneDataSize_ < 2 {
+			dialog "Error : geneDataSize < 2", 1
+		}
+		probMutation_ = _probMutaion
+		probCrossover_ = _probCrossover
+		numofElite_ = _numofElite
+		generation_ = 0
+		// 個体群の作成
+		dim genes_, _population, _geneDataSize
+		dim genesNext_, _population, _geneDataSize
+		// 教師データのコピー
+		dim geneGoal_, length(_geneGoal)
+		repeat length(_geneGoal)
+			geneGoal_(cnt) = _geneGoal(cnt)
+		loop
+		// 評価値リストの作成
+		dim fitnessList_, _population
+	return
+
+	/// デストラクタです。
+	#modterm
+	return
+
+	/// 世代数を返します。
+	#modcfunc local GetGeneration
+	return generation_
+
+	/// 個体数を返します。
+	#modcfunc local GetPopulation
+	return population_
+
+	///	遺伝子の要素数を返します。
+	#modcfunc local GetGeneDataSize
+	return geneDataSize_
+
+	/// 遺伝子1つの情報を取得します。
+	/// _idxGene 遺伝子の要素番号です。
+	/// _dstGene 取得先です。geneDataSize_ 以上の要素数を持つ数値配列を指定します。
+	#modfunc local GetGeneData int _idxGene, array _dstGene
+		repeat geneDataSize_, 0
+			_dstGene(cnt) = genes_(_idxGene, cnt)
+		loop
+	return
+
+	/// 現世代の遺伝子を設定します。
+	#modfunc local SetGeneData int _idxGene, array _geneData
+		repeat geneDataSize_, 0
+			genes_(_idxGene, cnt) = _geneData(cnt)
+		loop
+	return
+
+	/// 現世代の遺伝子をランダムに設定します。
+	#modfunc local SetGeneDataRandom int _idxGene
+		repeat geneDataSize_, 0
+			genes_(_idxGene, cnt) = rnd(1)
+		loop
+	return
+
+	/// スコアを返します。
+	#modcfunc local GetFitness int _idxGene
+	return fitnessList_(_idxGene)
+	
+	// 2つの遺伝子を２点交差して1つの遺伝子をgenesNext_に設定します。
+	#modfunc local CrossoverTwoPoint int _idxGene1, int _idxGene2, int _idxGeneNext1, local _idxBegin, local _idxEnd, local _opeLen, local _idxGeneSrc
+		// 交差する位置をランダムに決定
+		_idxBegin = rnd(geneDataSize_ - 2)
+		_idxEnd = _idxBegin + rnd(geneDataSize_ - _idxBegin - 1)
+		_opeLen = _idxEnd - _idxBegin
+
+		// ２点交叉の３領域の１番目の領域に、どちらかの遺伝子をコピー
+		if rnd(1) = 0 {
+			_idxGeneSrc = _idxGene1
+		} else {
+			_idxGeneSrc = _idxGene2
+		}
+		repeat _idxBegin, 0
+			genesNext_(_idxGeneNext1, cnt) = genes_(_idxGeneSrc, cnt)
+		loop
+		// ２点交叉の３領域の２番目の領域に、どちらかの遺伝子をコピー
+		if rnd(1) = 0 {
+			_idxGeneSrc = _idxGene1
+		} else {
+			_idxGeneSrc = _idxGene2
+		}
+		repeat _opeLen, _idxBegin
+			genesNext_(_idxGeneNext1, cnt) = genes_(_idxGeneSrc, cnt)
+		loop
+		// ２点交叉の３領域の３番目の領域に、どちらかの遺伝子をコピー
+		if rnd(1) = 0 {
+			_idxGeneSrc = _idxGene1
+		} else {
+			_idxGeneSrc = _idxGene2
+		}
+		repeat geneDataSize_ - _idxEnd - 1, _idxEnd + 1
+			genesNext_(_idxGeneNext1, cnt) = genes_(_idxGeneSrc, cnt)
+		loop
+	return
+	
+	// 遺伝子を要素単位で一定確率で突然変異させます。genesNext_を対象とします。
+	#modfunc local Mutate int _idxGeneNext
+		repeat geneDataSize_, 0
+			if rnd(1000) <= probMutation_ {
+				if genesNext_(_idxGeneNext, cnt) = 0 {
+					genesNext_(_idxGeneNext, cnt) = 1
+				} else {
+					genesNext_(_idxGeneNext, cnt) = 0
+				}
+			}
+		loop
+	return
+
+	/// 教師データと比較して評価をし、fitnessList_ に格納します。
+	/// 最低の適応度の個体もルーレット選択で選ばれる可能性を与えるために最低の適応度は1です。最高の適応度は geneDataSize_ + 1 です。
+	#modfunc local Evaluate int _idxGene
+		fitnessList_(_idxGene) = 1
+		repeat geneDataSize_, 0
+			if genes_(_idxGene, cnt) = geneGoal_(cnt) {
+				fitnessList_(_idxGene) += 1
+			}
+		loop
+	return
+
+	/// 現在の適応度の合計を計算します。
+	#modcfunc local GetTotalFitness local _tmpTotalFitness
+		_tmpTotalFitness = 0
+		repeat population_, 0
+			_tmpTotalFitness += fitnessList_(cnt)
+		loop		
+	return _tmpTotalFitness
+
+	/// ルーレット選択で選ばれた遺伝子の要素番号を返します。
+	/// _idxExclusion 除外する要素番号です。0 未満の場合は無視されます。
+	#modcfunc local GetIdxByRoulette int _totalFitness, int _idxExclusion, local _idx, local _target, local _tmpTotalFitness
+		_idx = 0
+		if _idxExclusion >= 0 {
+			_target = rnd(_totalFitness - fitnessList_(_idxExclusion))
+		} else {
+			_target = rnd(_totalFitness)
+		}
+		_tmpTotalFitness = 0
+		repeat population_, 0
+			if _idxExclusion < 0 & _idxExclusion = cnt {
+				_tmpTotalFitness += fitnessList_(cnt)
+				if _tmpTotalFitness >= _target {
+					_idx = cnt
+					break
+				}
+			}
+		loop
+	return _idx
+
+	/// genes_ から適応度の最も高い遺伝子の要素番号を探して返します。
+	#modcfunc local FindBestGene local _idxBest, local _fitnessBest
+		_idxBest = -1
+		_fitnessBest = -1
+		repeat population_
+			if _fitnessBest < fitnessList_(cnt) {
+				_idxBest = cnt
+				_fitnessBest = fitnessList_(cnt)
+			}
+		loop
+	return _idxBest
+
+	/// 世代を1つ進めます。
+	/// _idxLocus 遺伝子座。
+	#modfunc local GoNext local _totalFitness, local _idxBest, local _cntGenesNext, local _idxSelect1, local _idxSelect2, local _idxGene, local _idxLocus
+		
+		// 評価(初回のみ)。そのあとは、GoNext完了直前に評価を更新しておくため不要。
+		if generation_ = 0 {
+			repeat population_, 0
+				Evaluate@ScGaSim thismod, cnt
+			loop
+		}
+		
+		// エリート保存戦略
+		if numofElite_ > 0 {
+			_idxBest = FindBestGene@ScGaSim(thismod)
+			repeat numofElite_, 0: _idxGene = cnt
+				repeat geneDataSize_, 0: _idxLocus = cnt
+					genesNext_(_idxGene, _idxLocus) = genes_(_idxBest, _idxLocus)
+				loop
+			loop
+		}
+		
+		// 選択と交差により個体数上限まで次世代の遺伝子を作成する
+		_totalFitness = GetTotalFitness@ScGaSim(thismod)
+		_cntGenesNext = 0
+		repeat population_ - numofElite_, numofElite_
+			_idxSelect1 = GetIdxByRoulette@ScGaSim(thismod, _totalFitness, -1)
+			_idxSelect2 = GetIdxByRoulette@ScGaSim(thismod, _totalFitness, _idxSelect1)
+			CrossoverTwoPoint@ScGaSim thismod, _idxSelect1, _idxSelect2, cnt
+		loop		
+
+		// 交叉により作られた次世代の遺伝子に突然変異を与える
+		repeat population_ - numofElite_, numofElite_
+			Mutate@ScGaSim thismod, cnt
+		loop
+
+		// 世代の更新（次世代を現世代にする）
+		repeat population_, 0: _idxGene = cnt
+			repeat geneDataSize_, 0: _idxLocus = cnt
+				genes_(_idxGene, _idxLocus) = genesNext_(_idxGene, _idxLocus)
+			loop
+		loop
+
+		// 評価
+		repeat population_, 0
+			Evaluate@ScGaSim thismod, cnt
+		loop
+
+		generation_ += 1
+	return
+
+#global
+
+#if 0	/// サンプルを実行する場合は #if 0 を #if 1 に変えて実行してください。
+goto *main
+*OnButtonNext
+	// 世代を進める
+	GoNext@ScGaSim _gasim1
+	
+	redraw 0
+	color 255, 255, 255
+	boxf 0, 0 , ginfo_winx, ginfo_winy
+	pos 0, 32
+	color 0, 0, 0
+	_generation = GetGeneration@ScGaSim(_gasim1)
+	mes "教師データ"
+	mes "[1, 0, 1, 0, 1,]"
+	mes "第" + str(_generation) + "世代"
+	// 遺伝子情報を遺伝子ごとにテキストで出力
+	_geneDataSize = GetGeneDataSize@ScGaSim(_gasim1)
+	dim _dstGene, _geneDataSize
+	repeat GetPopulation@ScGaSim(_gasim1), 0
+		_strGeneInfo = "["
+		GetGeneData@ScGaSim _gasim1, cnt, _dstGene
+		repeat _geneDataSize, 0
+			_strGeneInfo += _dstGene(cnt)
+			_strGeneInfo += ", "
+		loop
+		_strGeneInfo += "] "
+		_strGeneInfo += str(GetFitness@ScGaSim(_gasim1, cnt))
+		mes _strGeneInfo
+	loop
+	redraw 1
+	return
+
+*main
+	// 教師データ
+	_geneGoal = 1, 0, 1, 0, 1
+	// GAのモジュールを構築
+	newmod _gasim1, ScGaSim, 10, 5, _geneGoal, 5, 1000, 1
+
+	// 初期の遺伝子データをランダムに設定
+	dim _geneData, 5
+	repeat GetPopulation@ScGaSim(_gasim1), 0
+		repeat 5, 0
+			_geneData(cnt) = rnd(2)
+		loop
+		SetGeneData@ScGaSim _gasim1, cnt, _geneData
+	loop
+	
+	button gosub "Next", *OnButtonNext
+#endif

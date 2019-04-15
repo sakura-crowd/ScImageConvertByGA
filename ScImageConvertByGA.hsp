@@ -1,0 +1,375 @@
+#include "ScGaSim.hsp"
+#include "ScVram.hsp"
+
+/// このプログラムについて
+/// 
+/// imageGoal.bmp を読み込み2値化した配列を教師データとして、遺伝的アルゴリズムでそれを探索します。
+/// 左上から横優先でスキャンして、１次元の配列とします。
+/// 例えば 32 * 24 pixel の画像の場合は 32 * 24 = 768 の配列になり、要素は 1 または 0 です。
+/// 設定されたスキャンしない色の画素は 0 、それ以外が 1 となります。
+/// 遺伝的アルゴリズムの個体データは、画像と同じ幅で 0 の部分は無視し、 1 の部分は imageGoal.bmp の同じ座標の色として描画されます。
+///
+/// 初期画像を用いる場合は、 imageStart.bmp を初期値として同様にスキャンします。
+/// この場合、遺伝的アルゴリズムの個体データは、画像と同じ幅で 0 の部分は背景色、 1 の部分は描画色として描画されます。
+
+goto *start
+	
+// 交叉の確率(0～1000)1000 = 100%
+// @note 現状無視され、100%交叉します。
+#const PROB_CROSSOVER 1000
+
+// 画像格納バッファID
+#const BUFID_IMAGE_START 1
+#const BUFID_IMAGE_GOAL 2	
+// 表示スクリーンID
+#const SCREEN_ID 0
+
+/// テキストから仮の画像を作成しファイル出力します。
+/// _strStart imageStart.bmp に出力されるテキストです。
+/// _strGoal imageGoal.bmp に出力されるテキストです。
+/// _width,  _height 出力される 2 つの画像のサイズです。
+#deffunc MakeSampleImage str _strStart, str _strGoal, int _width, int _height
+	buffer BUFID_IMAGE_START, _width, _height, 0
+	mes _strStart
+	bmpsave "imageStart.bmp"
+
+	buffer BUFID_IMAGE_GOAL, _width, _height, 0
+	mes _strGoal
+	bmpsave "imageGoal.bmp"
+return
+
+// gsel で選択されているバッファから画素を取得し、配列に2値化した値を設定します。
+#deffunc SetGeneDataFromBuffer array _dst, local y, local x
+	for y, 0, _imageHeight, 1
+		for x, 0, _imageWidth, 1
+			pget x, y
+			idxGeneData = y * _imageWidth + x
+			
+			if _scanIgnoreColorR == ginfo_r & _scanIgnoreColorG == ginfo_g & _scanIgnoreColorB == ginfo_b {			
+				_dst(idxGeneData) = 0
+			} else {
+				_dst(idxGeneData) = 1
+			}
+			
+		next
+	next
+return
+
+/// 遺伝子データを画像として描画します。
+#deffunc DrawImageFromGeneData var _vram, int _offsetX, int _offsetY, array _geneData, local x, local y, local i, local _idxPixel
+	i = 0
+	for y, 0, _imageHeight, 1
+		for x, 0, _imageWidth, 1
+			_idxPixel = (y * _imageWidth + x) * 3
+			if _geneData(i) = 0 {
+				SetPixel@ScVram _vram, x + _offsetX, y + _offsetY, _bgColorR, _bgColorG, _bgColorB
+			} else {
+				if _flgUseImageStart = 0 {
+					SetPixel@ScVram _vram, x + _offsetX, y + _offsetY, _pixelsGoal(_idxPixel + 0), _pixelsGoal(_idxPixel + 1), _pixelsGoal(_idxPixel + 2)
+				} else {
+					SetPixel@ScVram _vram, x + _offsetX, y + _offsetY, _drawColorR, _drawColorG, _drawColorB
+				}
+			}
+			i += 1
+		next
+	next
+return
+
+/// 遺伝子データを指定された倍率で描画します。
+#deffunc DrawImageFromGeneDataByBoxf int _offsetX, int _offsetY, array _geneData, int _scaleX, int _scaleY, local x, local y, local i, local _idxPixel
+	i = 0
+	for y, 0, _imageHeight, 1
+		for x, 0, _imageWidth, 1
+			_idxPixel = (y * _imageWidth + x) * 3
+			if _geneData(i) = 0 {
+				color _bgColorR, _bgColorG, _bgColorB
+				boxf _offsetX + x * _scaleX, _offsetY + y * _scaleY, _offsetX + (x + 1) * _scaleX, _offsetY + (y + 1) * _scaleY
+			} else {
+				if _flgUseImageStart = 0 {
+					color _pixelsGoal(_idxPixel + 0), _pixelsGoal(_idxPixel + 1), _pixelsGoal(_idxPixel + 2)
+					boxf _offsetX + x * _scaleX, _offsetY + y * _scaleY, _offsetX + (x + 1) * _scaleX, _offsetY + (y + 1) * _scaleY
+				} else {
+					color _drawColorR, _drawColorG, _drawColorB
+					boxf _offsetX + x * _scaleX, _offsetY + y * _scaleY, _offsetX + (x + 1) * _scaleX, _offsetY + (y + 1) * _scaleY
+				}
+			}
+			i += 1
+		next
+	next
+return
+
+*mainloop
+	MakeSampleImage	"平成", "令和", 32, 24 // 画像をテキストから作る場合は実行してください。
+
+	// 画像（初期値とゴール）２枚をそれぞれのバッファに読み込む。
+	buffer BUFID_IMAGE_START, 1, 1: gsel BUFID_IMAGE_START: picload "imageStart.bmp"
+	_imageWidth = ginfo_winx: _imageHeight = ginfo_winy
+	buffer BUFID_IMAGE_GOAL, _imageWidth, _imageHeight: gsel BUFID_IMAGE_GOAL: picload "imageGoal.bmp"
+
+	// 遺伝子画像のサイズなどを計算し、はみでるようならばウィンドウ幅を大きくする
+	gsel SCREEN_ID
+	pos 0, 0
+	mes "Population = " + str(_population)
+	mes "Prob Mutation = " + str(_probMutation)
+	mes "Number of Elite = " + str(_numofElite)
+	mes "Generation = "
+	mes "Best Fitness = "
+
+	_newUiHeight = ginfo_cy + ginfo_mesy
+	
+	_heightBestGeneImage = _imageHeight * _scaleYBestGene
+	_widthBestGeneImage = _imageWidth * _scaleXBestGene
+	_heightRemainGeneImages = ((_population - 1) / _cntHGeneImage + 1) * _imageHeight
+	_widthRemainGeneIamges = _cntHGeneImage * _imageWidth
+	_newWinX = _widthRemainGeneIamges
+	if _widthRemainGeneIamges < _widthBestGeneImage {
+		_newWinX = _widthBestGeneImage
+	}
+	_xBestGeneImage = _newWinX / 2 - (_imageWidth * _scaleXBestGene) / 2
+
+	screen SCREEN_ID, _newWinX + 8, _newUiHeight + _heightBestGeneImage + _heightRemainGeneImages + 8
+
+	// 描画用のモジュール型変数を構築
+	gsel 0
+	newmod _vram1, ScVram, SCREEN_ID
+
+	// 個体群に最初のデータをセット。すべて同じデータ。
+	gsel BUFID_IMAGE_START
+	dim _geneDataStart, _imageWidth * _imageHeight
+	SetGeneDataFromBuffer _geneDataStart
+
+	// 教師データをセット
+	gsel BUFID_IMAGE_GOAL
+	dim _geneDataGoal, _imageWidth * _imageHeight
+	SetGeneDataFromBuffer _geneDataGoal
+
+	// 教師データの画像の色を保存
+	dim _pixelsGoal, _imageWidth * _imageHeight * 3
+	newmod _vramGoal, ScVram, BUFID_IMAGE_GOAL
+	gsel BUFID_IMAGE_GOAL: GetPixels@ScVram _vramGoal, _pixelsGoal
+
+	// GA モジュール型変数を構築
+	newmod _gasim1, ScGaSim, _population, _imageWidth * _imageHeight, _geneDataGoal, PROB_MUTATION, PROB_CROSSOVER, _numofElite
+
+	// GA モジュール型変数内の初期遺伝子データ全てに最初のデータを設定。
+	repeat _population, 0
+		if _flgUseImageStart = 0 {
+			SetGeneDataRandom@ScGaSim _gasim1, cnt	// 初期値がランダム
+		} else {
+			SetGeneData@ScGaSim _gasim1, cnt, _geneDataStart	// !!! Startが正しい。まずはGoalの値を初期値にして乱れないかテスト。
+		}
+	loop
+
+	// 描画
+	gsel SCREEN_ID
+	dim _geneDataTmp, _imageWidth * _imageHeight
+
+	i2 = 0
+	repeat -1, 0
+		redraw 0
+
+		color 255, 255, 255: boxf 0, 0;_newUiHeight
+
+		pos 0, 0
+		color 0, 0, 0
+		mes "Population = " + str(_population)
+		mes "Prob Mutation = " + str(_probMutation)
+		mes "Number of Elite = " + str(_numofElite)
+		mes "Generation = " + str(GetGeneration@ScGaSim(_gasim1)) + "
+		mes "Best Fitness = " + str(GetFitness@ScGaSim(_gasim1, FindBestGene@ScGaSim(_gasim1))) + " / " + str(_imageWidth * _imageHeight + 1)
+
+		// 0 番目（エリート保存戦略があれば確実に最も適合度の高い要素）を拡大して表示
+		GetGeneData@ScGaSim _gasim1, 0, _geneDataTmp
+		DrawImageFromGeneDataByBoxf _xBestGeneImage, _newUiHeight, _geneDataTmp, _scaleXBestGene, _scaleYBestGene
+		// １番目以降の小さい画像群
+		i2 = 1
+		for offsetY, 0, ginfo_winy, _imageHeight
+			for offsetX, 0, _cntHGeneImage * _imageWidth, _imageWidth
+				GetGeneData@ScGaSim _gasim1, i2, _geneDataTmp
+				DrawImageFromGeneData _vram1, offsetX, offsetY + _newUiHeight + _heightBestGeneImage, _geneDataTmp
+				i2 += 1
+				if i2 >= _population {
+					_break
+				}
+			next
+			if i2 >= _population {
+				_break
+			}
+		next
+		redraw 1
+		GoNext@ScGaSim _gasim1
+		await 1
+	loop
+
+*start
+	title "ScImageConvertByGA - HSP3.5"
+	_uiX = 0
+	// GUI
+	// 個体数
+	_uiY = 24 * 0
+	_uiX = 0
+	pos _uiX, _uiY
+	mes "個体数"
+
+	_uiX = 50
+	pos _uiX, _uiY
+	_population = 64
+	input _population, 32, 16, 3
+
+	// 突然変異確率
+	_uiY = 24 * 1
+	_uiX = 0
+	pos _uiX, _uiY
+	mes "突然変異確率(0~1000)"
+
+	_uiX = 170
+	pos _uiX, _uiY
+	_probMutation = 5
+	input _probMutation, 32, 16, 4
+
+	// エリート保存戦略個数
+	_uiY = 24 * 2
+	_uiX = 0
+	pos _uiX, _uiY
+	mes "エリート戦略保存数"
+
+	_uiX = 170
+	pos _uiX, _uiY
+	_numofElite = 1
+	input _numofElite, 32, 16, 4
+
+	// スキャンで無視する色
+	_uiY = 24 * 3
+	_uiX = 0
+	pos _uiX, _uiY
+	mes "スキャンで無視する色(R, G, B 0~255)"
+
+	_uiX = 320
+	pos _uiX, _uiY
+	_scanIgnoreColorR = 255
+	input _scanIgnoreColorR, 30, 16, 3
+
+	_uiX = 360
+	pos _uiX, _uiY
+	_scanIgnoreColorG = 255
+	input _scanIgnoreColorG, 30, 16, 3
+
+	_uiX = 400
+	pos _uiX, _uiY
+	_scanIgnoreColorB = 255
+	input _scanIgnoreColorB, 30, 16, 3
+	
+
+	// 初期値設定
+	_uiY = 24 * 4
+	_uiX = 0
+	pos _uiX, _uiY
+	_flgUseImageStart = 0
+	objsize 240, 24
+	chkbox "初期画像を使用する(オフならばランダム)", _flgUseImageStart
+
+	// 背景色
+	_uiY = 24 * 5
+	_uiX = 0
+	pos _uiX, _uiY
+	mes "背景色(初期画像ありの場合 R, G, B 0~255)"
+
+	_uiX = 320
+	pos _uiX, _uiY
+	_bgColorR = 255
+	input _bgColorR, 30, 16, 3
+
+	_uiX = 360
+	pos _uiX, _uiY
+	_bgColorG = 255
+	input _bgColorR, 30, 16, 3
+
+	_uiX = 400
+	pos _uiX, _uiY
+	_bgColorB = 255
+	input _bgColorR, 30, 16, 3
+
+	// 描画色
+	_uiY = 24 * 6
+	_uiX = 0
+	pos _uiX, _uiY
+	mes "描画色(初期画像ありの場合 R, G, B 0~255)"
+
+	_uiX = 320
+	pos _uiX, _uiY
+	_drawColorR = 0
+	input _drawColorR, 30, 16, 3
+
+	_uiX = 360
+	pos _uiX, _uiY
+	_drawColorG = 0
+	input _drawColorR, 30, 16, 3
+
+	_uiX = 400
+	pos _uiX, _uiY
+	_drawColorB = 0
+	input _drawColorR, 30, 16, 3
+
+	// 表示倍率
+	_uiY = 24 * 7
+	_uiX = 0
+	pos _uiX, _uiY
+	mes "表示倍率 X Y"
+
+	_uiX = 100
+	pos _uiX, _uiY
+	_scaleXBestGene = 3
+	input _scaleXBestGene, 20, 16, 2
+
+	_uiX = 130
+	pos _uiX, _uiY
+	_scaleYBestGene = 3
+	input _scaleYBestGene, 20, 16, 2
+
+	// １行に並べる画像の個数
+	_uiY = 24 * 8
+	_uiX = 0
+	pos _uiX, _uiY
+	mes "横に並べる画像の個数"
+
+	_uiX = 170
+	pos _uiX, _uiY
+	_cntHGeneImage = 8
+	input _cntHGeneImage, 20, 16, 3
+
+	// 開始ボタン
+	_uiY = 24 * 9
+	_uiX = 0
+	pos _uiX, _uiY
+	objsize 64, 32
+	button goto "GA Start",*input_check
+
+	_uiHeight = 150
+	stop
+
+*input_check
+	if _population <= 2 {
+		dialog "個体数は2個以上にしてください", 1
+		stop
+	}
+	if _probMutation < 1 or _probMutation > 1000 {
+		dialog "突然変異確率は1以上1000以下にしてください", 1
+		stop
+	}
+	if _numofElite > (_population - 1) {
+		dialog "エリート戦略保存数は(個体数 - 1)以下にしてください。", 1
+		stop
+	}
+	if _scanIgnoreColorR < 0 or _scanIgnoreColorR > 255 or _scanIgnoreColorG < 0 or _scanIgnoreColorG > 255 or _scanIgnoreColorB < 0 or _scanIgnoreColorB > 255 {
+		dialog "スキャンで無視する色の設定が無効です。0~255の範囲で設定してください。", 1
+	}
+	if _flgUseImageStart = 1 {
+		if _bgColorR < 0 or _bgColorR > 255 or _bgColorG < 0 or _bgColorG > 255 or _bgColorB < 0 or _bgColorB > 255 {
+			dialog "背景色の設定が無効です。0~255の範囲で設定してください。", 1
+		}
+		if _drawColorR < 0 or _drawColorR > 255 or _drawColorG < 0 or _drawColorG > 255 or _drawColorB < 0 or _drawColorB > 255 {
+			dialog "描画色の設定が無効です。0~255の範囲で設定してください。", 1
+		}
+	}
+	
+	goto *mainloop

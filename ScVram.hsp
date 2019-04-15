@@ -1,0 +1,93 @@
+/// スクリーンのVRAM情報へのアクセスを行うモジュール型です。
+/// 参照：https://wiki.hsp.moe/小ワザ／VRAMを直接操作してみる.html
+/// vram_ VRAM に対応した変数です。
+/// width_, height_ VRAM の幅です。
+/// bufId_ VRAM のバッファIDまたはスクリーンIDです。
+#module ScVram vram_, width_, height_, vwidth_, bufId_
+
+	// 初期化時のみ gsel で _bufId で指定されたバッファを操作先に一時的に変更します。他の呼び出しでは呼び出し前にgselをしてください。
+	#modinit int _bufId, local _oldBufId
+		bufId_ = _bufId
+		_oldBufId = ginfo_sel: gsel bufId_
+		
+		mref vram_, 66
+		vwidth_ = ((ginfo_winx * 3) + 3) & 0xfffffffc
+		width_ = ginfo_winx
+		height_ = ginfo_winy
+
+		gsel _oldBufId
+	return
+
+	#modterm
+	return
+
+	/// VRAMと対応したクライアント領域の横幅を返します。
+	#modcfunc local GetWidth
+	return width_
+
+	/// VRAMと対応したクライアント領域の縦幅を返します。
+	#modcfunc local GetHeight
+	return height_
+
+	/// 操作先のバッファIDです。モジュール関数を呼び出す場合は、 gsel でこの戻り値を指定してから呼び出してください。
+	#modcfunc local GetBufId
+	return bufId_
+
+	/// 指定された座標の色情報を設定します。
+	/// 設定を画面に反映するには redraw 1 を呼び出してください。
+	///
+	/// _x, _y 座標を指定してください。
+	/// _r, _g, _b 色情報を指定してください。値は 0 ～ 255 の範囲です。
+	#modfunc local SetPixel int _x, int _y, int _r, int _g, int _b, local _index
+		_index = ((height_ - 1 - _y) * vwidth_) + _x * 3
+		poke vram_, _index + 0, _b
+		poke vram_, _index + 1, _g
+		poke vram_, _index + 2, _r
+	return
+
+	/// 指定された座標の色情報を取得します。
+	/// _x, _y 座標を指定してください。
+	/// _r, _g, _b int 型の変数を指定してください。呼び出し後に色情報(0～255)が設定されます。
+	#modfunc local GetPixel int _x, int _y, var _r, var _g, var _b, local _index
+		_index = ((height_ - 1 - _y) * vwidth_) + _x * 3
+		_b = peek(vram_, _index + 0)
+		_g = peek(vram_, _index + 1)
+		_r = peek(vram_, _index + 2)
+	return
+
+	/// 左上から横優先でR, G, B の順で色情報をバイト単位で配列に書き込みます。
+	#modfunc local GetPixels array _pixels, local _r, local _g, local _b, local x, local y
+		repeat height_, 0: y = cnt
+			repeat width_, 0: x = cnt
+				GetPixel@ScVram thismod, x, y, _r, _g, _b
+				_pixels((y * width_ + x) * 3 + 0) = _r
+				_pixels((y * width_ + x) * 3 + 1) = _g
+				_pixels((y * width_ + x) * 3 + 2) = _b
+			loop
+		loop
+	return
+		
+#global
+
+#if 0
+*test
+	screen 0, 256 + 1, 128
+	buffer 1, 256 + 1, 128
+	gsel 0
+	newmod _vram1, ScVram, 1
+	gsel 1
+	repeat ginfo_winx - 1, 0
+		SetPixel@ScVram _vram1, cnt,   0,   1,   2,   3
+		SetPixel@ScVram _vram1, cnt,  32, 255,   0,   0
+		SetPixel@ScVram _vram1, cnt,  64,   0, 255,   0
+		SetPixel@ScVram _vram1, cnt,  96,   0,   0, 255
+	loop	
+	redraw 1	// 設定を画面に反映
+
+	_r = 0: _g = 0: _b = 0
+	GetPixel@ScVram _vram1, 0, 0, _r, _g, _b
+	mes "r = " + str(_r) + ", g = " + str(_g) + ", b = " + str(_b)
+
+	gsel 0: pos 0, 0: gcopy 1, 0, 0, 256 + 1, 128
+#endif
+	
