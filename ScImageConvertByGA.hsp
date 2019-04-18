@@ -99,12 +99,18 @@ return
 return
 
 *mainloop
-	MakeSampleImage	"平成", "令和", 32, 24 // 画像をテキストから作る場合は実行してください。
+	;MakeSampleImage	"平成", "令和", 32, 24 // 画像をテキストから作る場合は実行してください。
 
 	// 画像（初期値とゴール）２枚をそれぞれのバッファに読み込む。
-	buffer BUFID_IMAGE_START, 1, 1: gsel BUFID_IMAGE_START: picload "imageStart.bmp"
+	buffer BUFID_IMAGE_GOAL, 1, 1: gsel BUFID_IMAGE_GOAL: picload "imageGoal.bmp"
 	_imageWidth = ginfo_winx: _imageHeight = ginfo_winy
-	buffer BUFID_IMAGE_GOAL, _imageWidth, _imageHeight: gsel BUFID_IMAGE_GOAL: picload "imageGoal.bmp"
+	buffer BUFID_IMAGE_START, 1, 1: gsel BUFID_IMAGE_START: picload "imageStart.bmp"
+	_imageWidthStart = ginfo_winx: _imageHeightStart = ginfo_winy
+	if _flgUseImageStart = 1 {
+		if _imageWidth != _imageWidthStart or _imageHeight != _imageHeightStart {
+			dialog "imageStart.bmp と imageGoal.bmp のサイズが異なります。", 1
+		}
+	}
 
 	// 遺伝子画像のサイズなどを計算し、はみでるようならばウィンドウ幅を大きくする
 	gsel SCREEN_ID
